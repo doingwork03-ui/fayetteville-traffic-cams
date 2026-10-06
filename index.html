@@ -1,0 +1,872 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fayetteville Traffic Cams</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&family=Overpass+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout: full-bleed map, floating left console (list) + right viewer drawer; bottom sheet on phones */
+:root {
+  --bg: #eef1ee;
+  --panel: #ffffff;
+  --panel-2: #f4f6f4;
+  --fg: #17211c;
+  --muted: #5d6b63;
+  --line: #d9e0db;
+  --sign: #0f6b45;        /* interstate-sign green */
+  --sign-fg: #ffffff;
+  --i95: #1f5fbf;
+  --i295: #0f6b45;
+  --us301: #8a5a00;
+  --amber: #f2a900;       /* selection / live */
+  --danger: #b3261e;
+  --route-fg: #ffffff;    /* text/icon on route-colored badges and pins */
+  --focus: #8a5a00;       /* focus ring: >= 3:1 against panels and map */
+  --sheet-h: 44%;         /* phone bottom-sheet height (collapsed: see .sheet-collapsed) */
+  --shadow: 0 10px 30px rgba(20, 35, 28, .14), 0 2px 6px rgba(20, 35, 28, .08);
+  --display: "Overpass", "Highway Gothic", "Arial Narrow", system-ui, sans-serif;
+  --mono: "Overpass Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1411; --panel: #161e1a; --panel-2: #1d2722; --fg: #e6ece8; --muted: #93a39a;
+    --line: #2a3630; --sign: #1f8a5c; --i95: #5b93ea; --i295: #3fb07f; --us301: #d6a03c;
+    --route-fg: #0b1410; --focus: #f2a900;
+    --shadow: 0 10px 30px rgba(0,0,0,.45), 0 2px 6px rgba(0,0,0,.3); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1411; --panel: #161e1a; --panel-2: #1d2722; --fg: #e6ece8; --muted: #93a39a;
+  --line: #2a3630; --sign: #1f8a5c; --i95: #5b93ea; --i295: #3fb07f; --us301: #d6a03c;
+  --route-fg: #0b1410; --focus: #f2a900;
+  --shadow: 0 10px 30px rgba(0,0,0,.45), 0 2px 6px rgba(0,0,0,.3); color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.45 var(--display); overflow: hidden; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+[hidden] { display: none !important; }
+
+#map { position: fixed; inset: 0; background: var(--bg); }
+.leaflet-container { font-family: var(--display); background: var(--bg); }
+.leaflet-control-attribution { font-size: 11px; background: color-mix(in srgb, var(--panel) 85%, transparent) !important; color: var(--muted); }
+.leaflet-control-attribution a { color: var(--muted); }
+.leaflet-bar a { background: var(--panel); color: var(--fg); border-color: var(--line); }
+.leaflet-bar a:hover { background: var(--panel-2); color: var(--fg); }
+
+/* ---------- Console (left) ---------- */
+.console {
+  position: fixed; z-index: 1000; top: calc(16px + env(safe-area-inset-top, 0px)); left: 16px; bottom: 16px;
+  width: 360px; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden;
+}
+.brand { display: flex; gap: 12px; align-items: center; padding: 16px 16px 12px; }
+.shield {
+  flex: none; width: 44px; height: 44px; border-radius: 9px; background: var(--sign); color: var(--sign-fg);
+  display: grid; place-items: center; border: 2px solid var(--sign-fg); box-shadow: 0 0 0 2px var(--sign);
+}
+.brand h1 { margin: 0; font-size: 20px; font-weight: 800; letter-spacing: .01em; line-height: 1.1; text-wrap: balance; }
+.brand p { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
+.brand .spacer { flex: 1; }
+.icon-btn {
+  flex: none; width: 36px; height: 36px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel-2);
+  display: grid; place-items: center;
+}
+.icon-btn:hover { border-color: var(--muted); }
+.icon-btn svg { width: 18px; height: 18px; }
+
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 0 16px 12px; }
+.stat { background: var(--panel-2); border-radius: 10px; padding: 8px 10px; }
+.stat b { display: block; font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+
+.tools { padding: 0 16px 12px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--line); }
+.search { position: relative; }
+.search svg { position: absolute; left: 11px; top: 50%; width: 16px; height: 16px; transform: translateY(-50%); color: var(--muted); }
+.search input {
+  width: 100%; padding: 10px 12px 10px 34px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-2); outline: none;
+}
+.search input:focus { border-color: var(--sign); }
+.search input:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
+.cam:focus-visible, .tile:focus-visible { outline-offset: -1px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  border: 1px solid var(--line); background: transparent; border-radius: 999px; padding: 5px 11px 3px; font-size: 13px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.chip .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c, var(--muted)); }
+.chip[aria-pressed="true"] { background: var(--fg); color: var(--panel); border-color: var(--fg); }
+.view-toggle { display: flex; background: var(--panel-2); border-radius: 10px; padding: 3px; }
+.view-toggle button { flex: 1; border: 0; background: transparent; padding: 7px 0 5px; border-radius: 8px; font-weight: 600; font-size: 13px; color: var(--muted); }
+.view-toggle button[aria-pressed="true"] { background: var(--panel); color: var(--fg); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+
+.list { flex: 1; overflow-y: auto; padding: 8px; margin: 0; list-style: none; }
+.cam {
+  display: grid; grid-template-columns: 92px 1fr; gap: 12px; align-items: center; width: 100%; text-align: left;
+  padding: 8px; border-radius: 10px; border: 1px solid transparent; background: transparent;
+}
+.cam:hover { background: var(--panel-2); }
+.cam.active { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 10%, var(--panel)); }
+.thumb { position: relative; width: 92px; aspect-ratio: 3/2; border-radius: 7px; overflow: hidden; background: var(--panel-2); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb.offline img { opacity: .35; }
+.thumb.offline::after {
+  content: "OFFLINE"; position: absolute; inset: auto 4px 4px auto; padding: 1px 5px 0; border-radius: 4px;
+  background: var(--danger); color: #fff; font-size: 9.5px; font-weight: 800; letter-spacing: .08em;
+}
+.cam-body { min-width: 0; }
+.cam-name { font-weight: 600; font-size: 14px; line-height: 1.25; }
+.cam-meta { display: flex; align-items: center; gap: 6px; margin-top: 4px; color: var(--muted); font-size: 12px; }
+.route {
+  display: inline-block; padding: 2px 6px 0; border-radius: 4px; font-size: 11px; font-weight: 800; letter-spacing: .03em;
+  background: var(--c); color: var(--route-fg);
+}
+.code { font-family: var(--mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty { padding: 32px 16px; text-align: center; color: var(--muted); }
+.blocked { margin: 0 8px 8px; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--amber) 18%, var(--panel)); font-size: 12.5px; line-height: 1.4; }
+.foot { padding: 10px 16px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }
+.foot a { color: inherit; }
+
+.basemap { display: flex; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 3px; box-shadow: var(--shadow); }
+.basemap button { border: 0; background: transparent; padding: 6px 11px 4px; border-radius: 7px; font: 600 12.5px var(--display); color: var(--muted); }
+.basemap button[aria-pressed="true"] { background: var(--fg); color: var(--panel); }
+@media (max-width: 820px) { .leaflet-bottom.leaflet-right { bottom: calc(var(--sheet-h) + 4px); } }
+
+/* ---------- Markers ---------- */
+.pin { width: 30px; height: 30px; }
+.pin > div {
+  width: 30px; height: 30px; border-radius: 50% 50% 50% 4px; transform: rotate(-45deg);
+  background: var(--c); border: 2.5px solid #fff; box-shadow: 0 3px 8px rgba(0,0,0,.35);
+  display: grid; place-items: center; transition: transform .15s;
+}
+.pin svg { transform: rotate(45deg); width: 14px; height: 14px; color: var(--route-fg); }
+.pin.active > div { background: var(--amber); transform: rotate(-45deg) scale(1.25); }
+.pin.active svg { color: #1b1b1b; }
+.pin:hover > div, .pin:focus-visible > div { transform: rotate(-45deg) scale(1.15); }
+.pin:focus-visible { outline: none; }
+.pin:focus-visible > div { outline: 3px solid var(--focus); outline-offset: 2px; }
+.leaflet-tooltip.cam-tip {
+  background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow);
+  font-family: var(--display); font-weight: 600; padding: 5px 9px 3px;
+}
+.leaflet-tooltip.cam-tip::before { display: none; }
+
+/* ---------- Viewer (right) ---------- */
+.viewer {
+  position: fixed; z-index: 1001; top: calc(16px + env(safe-area-inset-top, 0px)); right: 16px; width: min(560px, calc(100vw - 424px));
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden;
+  display: flex; flex-direction: column; max-height: calc(100% - 32px);
+  animation: slide .22s ease-out;
+}
+@keyframes slide { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.v-head { display: flex; gap: 10px; align-items: flex-start; padding: 14px 14px 10px 16px; }
+.v-head .t { flex: 1; min-width: 0; }
+.v-head h2 { margin: 0; font-size: 18px; font-weight: 800; line-height: 1.2; text-wrap: balance; }
+.v-head .cam-meta { margin-top: 6px; }
+.stage { position: relative; background: #0b0f0d; aspect-ratio: 3/2; max-width: 100%; }
+.stage img, .stage video { width: 100%; height: 100%; object-fit: contain; display: block; }
+.stage video { position: absolute; inset: 0; background: #0b0f0d; }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+.btn.primary[aria-pressed="true"] { background: var(--danger); border-color: var(--danger); }
+.stage .live {
+  position: absolute; top: 10px; left: 10px; display: inline-flex; gap: 6px; align-items: center;
+  background: rgba(0,0,0,.6); color: #fff; padding: 4px 9px 2px; border-radius: 999px; font-size: 11px; font-weight: 800; letter-spacing: .1em;
+}
+.stage .live i { width: 8px; height: 8px; border-radius: 50%; background: #ff4d4d; animation: pulse 1.6s infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+.stage .loading, .stage .err {
+  position: absolute; inset: 0; display: grid; place-items: center; color: #cfd8d3; font-size: 14px; text-align: center; padding: 20px;
+}
+.stage .loading { background: rgba(0,0,0,.25); }
+.spinner { width: 28px; height: 28px; border: 3px solid rgba(255,255,255,.25); border-top-color: var(--amber); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.stage .nav {
+  position: absolute; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border-radius: 50%; border: 0;
+  background: rgba(0,0,0,.55); color: #fff; display: grid; place-items: center; opacity: .85;
+}
+.stage .nav:hover { opacity: 1; background: rgba(0,0,0,.75); }
+.stage .nav.prev { left: 10px; } .stage .nav.next { right: 10px; }
+.stage .nav svg { width: 20px; height: 20px; }
+.bar { height: 3px; background: var(--panel-2); }
+.bar i { display: block; height: 100%; width: 0; background: var(--amber); transition: width 1s linear; }
+.v-ctrl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 14px; }
+.v-ctrl .when { flex: 1; min-width: 150px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.v-ctrl .when b { color: var(--fg); font-weight: 600; }
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px 5px; border-radius: 9px; border: 1px solid var(--line);
+  background: var(--panel-2); font-size: 13px; font-weight: 600; text-decoration: none; color: var(--fg);
+}
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--sign); border-color: var(--sign); color: #fff; }
+.btn svg { width: 15px; height: 15px; }
+select.rate { padding: 6px 8px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel-2); font: 600 13px var(--display); color: var(--fg); }
+.v-info { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border-top: 1px solid var(--line); }
+.v-info div { background: var(--panel); padding: 9px 14px; min-width: 0; }
+.v-info span { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.v-info b { font-family: var(--mono); font-weight: 600; font-size: 12.5px; overflow-wrap: anywhere; }
+.v-info a { color: var(--fg); }
+.kbd { font-family: var(--mono); font-size: 11px; color: var(--muted); padding: 0 14px 12px; }
+
+/* ---------- Wall (grid of all cameras) ---------- */
+.wall {
+  position: fixed; z-index: 999; top: calc(16px + env(safe-area-inset-top, 0px)); left: 392px; right: 16px; bottom: 16px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow);
+  overflow-y: auto; padding: 16px;
+}
+.wall-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.wall-head h2 { margin: 0; font-size: 18px; font-weight: 800; }
+.wall-head span { color: var(--muted); font-size: 13px; }
+.wall-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.tile { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel-2); text-align: left; padding: 0; }
+.tile:hover { border-color: var(--amber); }
+.tile .img { aspect-ratio: 3/2; background: #0b0f0d; }
+.tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tile .cap { padding: 8px 10px; }
+
+#toast { position: fixed; z-index: 2100; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: calc(100vw - 32px);
+  background: var(--fg); color: var(--panel); padding: 10px 14px 8px; border-radius: 10px; box-shadow: var(--shadow); font-weight: 600; font-size: 13.5px; }
+
+/* Fullscreen lightbox */
+.lightbox { position: fixed; inset: 0; z-index: 2000; background: rgba(5,8,6,.94); display: grid; place-items: center; padding: 24px; }
+.lightbox img { max-width: 100%; max-height: calc(100% - 48px); object-fit: contain; border-radius: 6px; }
+.lightbox .cap { position: absolute; left: 24px; bottom: 18px; color: #e6ece8; font-weight: 600; }
+.lightbox .icon-btn { position: absolute; top: 18px; right: 18px; background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.2); color: #fff; }
+
+/* ---------- Phones ---------- */
+.sheet-toggle, .grabber { display: none; }
+@media (max-width: 820px) {
+  body.sheet-collapsed { --sheet-h: calc(78px + env(safe-area-inset-bottom, 0px)); }
+  .console { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: var(--sheet-h); max-height: calc(100% - 40px); border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .grabber { display: block; flex: none; width: 100%; height: 14px; border: 0; padding: 0; background: transparent; touch-action: none; }
+  .grabber::before { content: ""; display: block; margin: 6px auto 0; width: 40px; height: 4px; border-radius: 2px; background: var(--line); }
+  .sheet-toggle { display: grid; }
+  .sheet-toggle svg { transition: transform .2s; }
+  .console.collapsed .sheet-toggle svg { transform: rotate(180deg); }
+  .console.collapsed > :not(.brand):not(.grabber) { visibility: hidden; }
+  .stats { display: none; }
+  .brand { padding: 2px 12px 10px 16px; gap: 10px; cursor: pointer; }
+  .brand > div:nth-child(2) { min-width: 0; }
+  .brand h1 { font-size: 17px; }
+  .brand p { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .shield { width: 38px; height: 38px; }
+  .foot { padding: 8px 16px; font-size: 11px; }
+  .viewer { top: calc(10px + env(safe-area-inset-top, 0px)); left: 10px; right: 10px; width: auto;
+    max-height: min(62%, calc(100% - var(--sheet-h) - 24px - env(safe-area-inset-top, 0px))); overflow-y: auto; }
+  .v-head { padding: 12px 12px 8px 14px; }
+  .v-head h2 { font-size: 16px; }
+  .v-ctrl { padding: 10px 12px; gap: 6px; }
+  .v-ctrl .when { flex-basis: 100%; }
+  .v-info div { padding: 8px 12px; }
+  .kbd { display: none; }
+  .wall { left: 10px; right: 10px; top: calc(10px + env(safe-area-inset-top, 0px)); bottom: calc(var(--sheet-h) + 10px); padding: 12px; }
+  .wall-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<div id="map" aria-label="Map of Fayetteville, NC traffic cameras"></div>
+
+<aside class="console" id="console" aria-label="Camera list and filters">
+  <button class="grabber" id="grabber" tabindex="-1" aria-hidden="true"></button>
+  <div class="brand">
+    <div class="shield" aria-hidden="true">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h13l5-3v12l-5-3H3z"/><circle cx="9" cy="10" r="2"/><path d="M8 13v7"/></svg>
+    </div>
+    <div>
+      <h1>Fayetteville Traffic Cams</h1>
+      <p>Cumberland County, NC · NCDOT live cameras</p>
+    </div>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="themeBtn" title="Toggle light / dark" aria-label="Toggle light or dark theme">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+    <button class="icon-btn sheet-toggle" id="sheetToggle" aria-controls="console" aria-expanded="true" aria-label="Collapse camera list">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m6 9 6 6 6-6"/></svg>
+    </button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><b id="statTotal">31</b><span>Cameras</span></div>
+    <div class="stat"><b id="statShown">31</b><span>Showing</span></div>
+    <div class="stat"><b id="clock">--:--</b><span>Local time</span></div>
+  </div>
+
+  <div class="tools">
+    <label class="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="q" type="search" placeholder="Search road, exit, or camera ID" aria-label="Search cameras" autocomplete="off">
+    </label>
+    <div class="chips" id="chips" role="group" aria-label="Filter by route"></div>
+    <div class="view-toggle" role="group" aria-label="View mode">
+      <button id="viewMap" aria-pressed="true">Map + list</button>
+      <button id="viewWall" aria-pressed="false">Camera wall</button>
+    </div>
+  </div>
+
+  <ul class="list" id="list"></ul>
+
+  <div class="blocked" id="blocked" hidden role="status">Camera images and map tiles can't load in this viewer. Open a camera and use <b>Live image ↗</b> to see it, or download this page and open it in a browser for the full map with live video.</div>
+  <div class="foot">
+    Images from <a href="https://drivenc.gov" target="_blank" rel="noopener">DriveNC.gov</a> (NCDOT). Snapshots refresh about once a minute; most cameras also have live video. Don't use while driving.
+  </div>
+</aside>
+
+<section class="wall" id="wall" hidden aria-label="All cameras">
+  <div class="wall-head"><h2>Camera wall</h2><span id="wallCount"></span><span>Click any feed to open it.</span></div>
+  <div class="wall-grid" id="wallGrid"></div>
+</section>
+
+<section class="viewer" id="viewer" hidden aria-label="Camera viewer">
+  <div class="v-head">
+    <div class="t">
+      <h2 id="vName">Camera</h2>
+      <div class="cam-meta"><span class="route" id="vRoute">I-95</span><span id="vDir"></span><span class="code" id="vCode"></span></div>
+    </div>
+    <button class="icon-btn" id="vClose" title="Close (Esc)" aria-label="Close viewer">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </button>
+  </div>
+  <div class="stage">
+    <img id="vImg" alt="">
+    <video id="vVideo" muted playsinline autoplay hidden aria-label="Live video"></video>
+    <span class="live"><i></i>LIVE</span>
+    <div class="loading" id="vLoading"><div class="spinner"></div></div>
+    <div class="err" id="vErr" hidden>This camera isn't sending an image right now.<br>NCDOT may have it offline. Try again in a minute.</div>
+    <button class="nav prev" id="vPrev" aria-label="Previous camera"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m15 18-6-6 6-6"/></svg></button>
+    <button class="nav next" id="vNext" aria-label="Next camera"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 18 6-6-6-6"/></svg></button>
+  </div>
+  <div class="bar"><i id="vBar"></i></div>
+  <div class="v-ctrl">
+    <div class="when"><span id="vWhenWrap">Updated <b id="vWhen">—</b></span> · <span id="vNextWrap">next in <b id="vNextIn">—</b></span></div>
+    <select class="rate" id="rate" aria-label="Refresh interval">
+      <option value="15">Every 15 s</option>
+      <option value="30">Every 30 s</option>
+      <option value="60" selected>Every 60 s</option>
+      <option value="0">Paused</option>
+    </select>
+    <button class="btn primary" id="vVideoBtn" aria-pressed="false"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Live video</span></button>
+    <button class="btn" id="vRefresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>Refresh</button>
+    <button class="btn" id="vFull"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>Enlarge</button>
+  </div>
+  <div class="v-info">
+    <div><span>Latitude</span><b id="vLat"></b></div>
+    <div><span>Longitude</span><b id="vLon"></b></div>
+    <div><span>Links</span><b><a id="vImgLink" target="_blank" rel="noopener">Live image ↗</a><br><a id="vGmaps" target="_blank" rel="noopener">Street map ↗</a></b></div>
+  </div>
+  <div class="kbd">← → switch camera · R refresh · F enlarge · Esc close</div>
+</section>
+
+<div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-labelledby="lbCap">
+  <img id="lbImg" alt="">
+  <div class="cap" id="lbCap"></div>
+  <button class="icon-btn" id="lbClose" aria-label="Close enlarged view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.17/hls.min.js"></script>
+<script>
+// NCDOT / DriveNC cameras within the Fayetteville area (pulled from drivenc.gov map feed, Oct 2026).
+// id = DriveNC site id; image served at https://www.drivenc.gov/map/Cctv/{id}
+// video = HLS base URL; key = DriveNC's public per-camera stream key (from /Camera/GetVideoUrl?imageId={id}),
+// exchanged for a short-lived playback token at play time. If NCDOT rotates keys, re-fetch them.
+const CAMERAS = [
+  { id: 5671, name: "US-301 at NC-59 (Hope Mills)", route: "US-301", dir: "Southbound", code: "D06-PCCTV08_I-5987-W (US301S_N", lat: 34.94855, lon: -78.92885,
+    video: "https://cfese02.services.ncdot.gov:8887/chan-5750_l/index.m3u8", key: {"token":"d5becaf8-076e-4b15-87ba-94a07278423f","sourceId":"907","systemSourceId":"Division 6"} },
+  { id: 5719, name: "I-95 near MM 37, south of Hope Mills", route: "I-95", dir: "Median", code: "D06-PCCTV03_I-5987-WC (I95M MM", lat: 34.88545, lon: -78.96099,
+    video: "https://cfese04.services.ncdot.gov:8887/chan-5799_l/index.m3u8", key: {"token":"5a871c61-87bd-45a6-8cd0-754b794f8ad4","sourceId":"960","systemSourceId":"Division 6"} },
+  { id: 5720, name: "I-95 at MM 35", route: "I-95", dir: "Median", code: "D06-PCCTV04_I-5987-WC (I95M MM", lat: 34.85742, lon: -78.96591,
+    video: "https://cfese05.services.ncdot.gov:8887/chan-5800_l/index.m3u8", key: {"token":"2f802b30-9ec7-490c-b261-023926aad678","sourceId":"961","systemSourceId":"Division 6"} },
+  { id: 6034, name: "I-95 at I-295 south end (MM 38)", route: "I-95", dir: "Northbound", code: "CCTV06-I95-38N_I295", lat: 34.90288, lon: -78.95752,
+    video: "https://cfese03.services.ncdot.gov:8887/chan-6261_l/index.m3u8", key: {"token":"b0f10d0f-bb13-47c8-bcad-5b0cafa1652e","sourceId":"2121","systemSourceId":"Division 6"} },
+  { id: 6035, name: "I-95 at MM 38", route: "I-95", dir: "Southbound", code: "CCTV06-I95-38S", lat: 34.90822, lon: -78.95652,
+    video: "https://cfese06.services.ncdot.gov:8887/chan-6262_l/index.m3u8", key: {"token":"25accf58-f9bf-46fd-8a93-8114766f4ee3","sourceId":"2122","systemSourceId":"Division 6"} },
+  { id: 5670, name: "I-95 at MM 40", route: "I-95", dir: "Northbound", code: "D06-PCCTV07_I-5987-WC (I95N MM", lat: 34.92479, lon: -78.94279,
+    video: "https://cfese01.services.ncdot.gov:8887/chan-5749_l/index.m3u8", key: {"token":"0362b336-b05a-4a5e-8ef8-09f35da8734a","sourceId":"906","systemSourceId":"Division 6"} },
+  { id: 5691, name: "I-95 at NC-59 (Exit 41)", route: "I-95", dir: "Northbound", code: "CCTV06-I95-41N_NC59", lat: 34.938, lon: -78.92235,
+    video: "https://cfese04.services.ncdot.gov:8887/chan-5770_l/index.m3u8", key: {"token":"2a4223ad-4cae-4585-8bd4-02e001926567","sourceId":"928","systemSourceId":"Division 6"} },
+  { id: 6036, name: "I-95 at Claude Lee Rd (Exit 44)", route: "I-95", dir: "Median", code: "CCTV06-I95-44M_CLAUDELEE", lat: 34.96205, lon: -78.88931,
+    video: "https://cfese04.services.ncdot.gov:8887/chan-6263_l/index.m3u8", key: {"token":"2f454799-e1df-4a25-b582-cdc76fbbfe5c","sourceId":"2123","systemSourceId":"Division 6"} },
+  { id: 5692, name: "I-95 at NC-87 (Exit 46)", route: "I-95", dir: "Northbound", code: "CCTV06-95-46N_NC87", lat: 34.97344, lon: -78.86172,
+    video: "https://cfese02.services.ncdot.gov:8887/chan-5771_l/index.m3u8", key: {"token":"7089a08d-ed2d-40b6-8be3-37d710b13e50","sourceId":"929","systemSourceId":"Division 6"} },
+  { id: 5693, name: "I-95 at NC-87 (Exit 46)", route: "I-95", dir: "Southbound", code: "CCTV06-I95-46S_NC87", lat: 34.97674, lon: -78.85554,
+    video: "https://cfese06.services.ncdot.gov:8887/chan-5772_l/index.m3u8", key: {"token":"fef12cac-96d1-48ca-bb61-5dee996b876a","sourceId":"930","systemSourceId":"Division 6"} },
+  { id: 6027, name: "I-95 at NC-210 (Exit 49)", route: "I-95", dir: "Northbound", code: "CCTV06-I95-49N_NC210", lat: 35.00715, lon: -78.82025,
+    video: "https://cfese04.services.ncdot.gov:8887/chan-6231_l/index.m3u8", key: {"token":"294e9e46-e562-4b7a-b313-fdb14b875553","sourceId":"2091","systemSourceId":"Division 6"} },
+  { id: 5695, name: "I-95 median cam (MM 55)", route: "I-95", dir: "Median", code: "CCTV06-I95-55M", lat: 35.00905, lon: -78.82023,
+    video: "https://cfese01.services.ncdot.gov:8887/chan-5774_l/index.m3u8", key: {"token":"0fabe9d9-a66e-46f1-8183-dbd1871a2bff","sourceId":"933","systemSourceId":"Division 6"} },
+  { id: 5694, name: "I-95 at NC-24 (Exit 52)", route: "I-95", dir: "Southbound", code: "CCTV06-I95-52S_NC24", lat: 35.04254, lon: -78.80431,
+    video: "https://cfese05.services.ncdot.gov:8887/chan-5773_l/index.m3u8", key: {"token":"77afb396-b15d-4726-a4c3-9748f875f0ad","sourceId":"932","systemSourceId":"Division 6"} },
+  { id: 5689, name: "I-95 at Murphy Rd (Exit 55)", route: "I-95", dir: "Southbound", code: "CCTV06-95-55S_SR1832", lat: 35.082899, lon: -78.7871,
+    video: "https://cfese02.services.ncdot.gov:8887/chan-5768_l/index.m3u8", key: {"token":"46403664-078d-4146-8b8c-2b49c103d246","sourceId":"926","systemSourceId":"Division 6"} },
+  { id: 6070, name: "I-95 Business ramp to I-95 (Exit 56)", route: "I-95", dir: "Northbound", code: "CCTV06-I95BUS-Ramp_I95 NB", lat: 35.08799, lon: -78.7906,
+    video: "https://cfese02.services.ncdot.gov:8887/chan-6396_l/index.m3u8", key: {"token":"ba219c87-9682-4c1e-8969-ce71a11979b4","sourceId":"2233","systemSourceId":"Division 6"} },
+  { id: 5697, name: "I-95 at I-95 Business / US-301 (Exit 56)", route: "I-95", dir: "Southbound", code: "CCTV06-I95-56S_I95BUS", lat: 35.09577, lon: -78.777,
+    video: "https://cfese01.services.ncdot.gov:8887/chan-5776_l/index.m3u8", key: {"token":"21d19edf-28be-4cf1-adbb-3514ea289535","sourceId":"935","systemSourceId":"Division 6"} },
+  { id: 5698, name: "I-95 south of Exit 58", route: "I-95", dir: "Southbound", code: "CCTV06-I95-58S", lat: 35.11255, lon: -78.76613,
+    video: "https://cfese06.services.ncdot.gov:8887/chan-5778_l/index.m3u8", key: {"token":"5c067e20-0701-4a21-b941-846a3d3bcf49","sourceId":"937","systemSourceId":"Division 6"} },
+  { id: 6037, name: "I-95 at I-295 (Exit 58)", route: "I-95", dir: "Northbound", code: "CCTV06-I95-58N_NC295", lat: 35.1235, lon: -78.75306,
+    video: "https://cfese04.services.ncdot.gov:8887/chan-6264_l/index.m3u8", key: {"token":"20e47faa-1bd9-42f9-b693-4d61b4789557","sourceId":"2124","systemSourceId":"Division 6"} },
+  { id: 6038, name: "I-95 at I-295 (Exit 58), PTZ", route: "I-95", dir: "PTZ", code: "PCCTV06-I95-58N_I295", lat: 35.12354, lon: -78.75298,
+    video: "https://cfsse02.services.ncdot.gov:8887/chan-6265_l/index.m3u8", key: {"token":"9e319da7-8a9e-4dc3-a324-9e309538d24e","sourceId":"936","systemSourceId":"Division 6"} },
+  { id: 6039, name: "I-95 at MM 59", route: "I-95", dir: "Southbound", code: "CCTV06-I95-59S", lat: 35.13513, lon: -78.74199,
+    video: null, key: null },
+  { id: 6032, name: "I-95 at MM 60, near Wade", route: "I-95", dir: "Northbound", code: "CCTV06-I95-60N", lat: 35.14205, lon: -78.73391,
+    video: "https://cfsse03.services.ncdot.gov:8887/chan-6255_l/index.m3u8", key: {"token":"786da8dd-d7c1-413d-9075-6107af4bc550","sourceId":"2115","systemSourceId":"Division 6"} },
+  { id: 5700, name: "I-95 at Wade (Exit 61)", route: "I-95", dir: "Northbound", code: "CCTV06-I95-61N", lat: 35.16511, lon: -78.70949,
+    video: "https://cfese03.services.ncdot.gov:8887/chan-5780_l/index.m3u8", key: {"token":"3987ac11-7210-4936-b1d0-7bd78e0a822b","sourceId":"939","systemSourceId":"Division 6"} },
+  { id: 6067, name: "I-95 at MM 64", route: "I-95", dir: "Southbound", code: "CCTV06-I95-64S", lat: 35.19012, lon: -78.68379,
+    video: "https://cfsse06.services.ncdot.gov:8887/chan-6392_l/index.m3u8", key: {"token":"f6219651-4670-41ad-b9bd-77d32088f01b","sourceId":"2230","systemSourceId":"Division 6"} },
+  { id: 6066, name: "I-95 at Godwin (Exit 65)", route: "I-95", dir: "Southbound", code: "CCTV06-I95-65S", lat: 35.20328, lon: -78.66964,
+    video: null, key: null },
+  { id: 6042, name: "I-295 at US-301 / Dunn Rd", route: "I-295", dir: "Westbound", code: "CCTV06-I295-34W_US301", lat: 35.12482, lon: -78.7603,
+    video: "https://cfese01.services.ncdot.gov:8887/chan-6271_l/index.m3u8", key: {"token":"7940dc9d-71b0-492e-82f4-caa2e39b758d","sourceId":"2130","systemSourceId":"Division 6"} },
+  { id: 5707, name: "I-295 at Coleman Rd", route: "I-295", dir: "Unknown", code: "CCTV06-NC295-33_COLEMAN", lat: 35.13693, lon: -78.78569,
+    video: "https://cfese04.services.ncdot.gov:8887/chan-5787_l/index.m3u8", key: {"token":"3accb1a4-4a96-4df0-bafa-d8ae8305fc84","sourceId":"947","systemSourceId":"Division 6"} },
+  { id: 5706, name: "I-295 at River Rd", route: "I-295", dir: "Unknown", code: "CCTV06-NC295_RIVER", lat: 35.1473, lon: -78.82579,
+    video: "https://cfese03.services.ncdot.gov:8887/chan-5786_l/index.m3u8", key: {"token":"fa6f3684-ce4c-4a1d-9ac6-60601f699478","sourceId":"946","systemSourceId":"Division 6"} },
+  { id: 6126, name: "Portable cam near Yadkin Rd", route: "I-295", dir: "PTZ", code: "PCCTVSW-031", lat: 35.10637, lon: -78.9963,
+    video: "https://cfese01.services.ncdot.gov:8887/chan-6413_l/index.m3u8", key: {"token":"86b134e1-41e9-4b7b-a553-e701aad1854f","sourceId":"2249","systemSourceId":"Division 6"} },
+  { id: 6129, name: "I-295 work zone at Reilly Rd", route: "I-295", dir: "PTZ", code: "PCCTVSW-053", lat: 35.10321, lon: -79.01024,
+    video: "https://cfese01.services.ncdot.gov:8887/chan-6424_l/index.m3u8", key: {"token":"906729dc-b36b-4d49-b205-da2f83f2aa85","sourceId":"2260","systemSourceId":"Division 6"} },
+  { id: 6127, name: "I-295 work zone near Reilly Rd (SW-033)", route: "I-295", dir: "PTZ", code: "PCCTVSW-033", lat: 35.10599, lon: -79.01305,
+    video: "https://cfese03.services.ncdot.gov:8887/chan-6414_l/index.m3u8", key: {"token":"d4add884-4a3f-4d8f-957b-804e06d6221d","sourceId":"2250","systemSourceId":"Division 6"} },
+  { id: 6128, name: "I-295 work zone near Reilly Rd (SW-050)", route: "I-295", dir: "PTZ", code: "PCCTVSW-050", lat: 35.10757, lon: -79.01249,
+    video: "https://cfese05.services.ncdot.gov:8887/chan-6422_l/index.m3u8", key: {"token":"4af8b4c6-bb49-4701-8b80-0d4221ef3d46","sourceId":"2258","systemSourceId":"Division 6"} },
+];
+const ROUTES = { "I-95": "--i95", "I-295": "--i295", "US-301": "--us301" };
+const imgUrl = id => `https://www.drivenc.gov/map/Cctv/${id}?t=${Date.now()}`;
+const $ = s => document.querySelector(s);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("faycams:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("faycams:" + k, JSON.stringify(v)); } catch {} },
+};
+
+/* ---------- Theme ---------- */
+const root = document.documentElement;
+const isDark = () => root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+const savedTheme = store.get("theme", null);
+if (savedTheme) root.dataset.theme = savedTheme;
+$("#themeBtn").onclick = () => { root.dataset.theme = isDark() ? "light" : "dark"; store.set("theme", root.dataset.theme); setTiles(); };
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => setTiles());
+
+/* ---------- Map ---------- */
+const map = L.map("map", { zoomControl: false, attributionControl: true }).setView([35.06, -78.88], 11);
+L.control.zoom({ position: "bottomright" }).addTo(map);
+// Esri basemaps (no API key). Streets follows the theme; Satellite adds road + place labels.
+const esri = name => `https://server.arcgisonline.com/ArcGIS/rest/services/${name}/MapServer/tile/{z}/{y}/{x}`;
+const ESRI_ATTR = 'Tiles &copy; Esri, HERE, Garmin, OpenStreetMap contributors';
+let tileGroup = L.layerGroup().addTo(map);
+let basemap = store.get("basemap", "streets");
+function setTiles() {
+  tileGroup.clearLayers();
+  const layers = basemap === "satellite"
+    ? ["World_Imagery", "Reference/World_Transportation", "Reference/World_Boundaries_and_Places"]
+    : isDark() ? ["Canvas/World_Dark_Gray_Base", "Canvas/World_Dark_Gray_Reference"] : ["World_Street_Map"];
+  layers.forEach((n, i) => tileGroup.addLayer(L.tileLayer(esri(n), { maxZoom: 19, maxNativeZoom: n.startsWith("Canvas") ? 16 : 19, attribution: i ? "" : ESRI_ATTR })));
+  document.querySelectorAll(".basemap button").forEach(b => b.setAttribute("aria-pressed", b.dataset.map === basemap));
+}
+const BasemapCtl = L.Control.extend({
+  options: { position: "bottomright" },
+  onAdd() {
+    const d = L.DomUtil.create("div", "basemap");
+    d.innerHTML = '<button data-map="streets">Streets</button><button data-map="satellite">Satellite</button>';
+    L.DomEvent.disableClickPropagation(d);
+    d.querySelectorAll("button").forEach(b => b.onclick = () => { basemap = b.dataset.map; store.set("basemap", basemap); setTiles(); });
+    return d;
+  },
+});
+map.addControl(new BasemapCtl());
+setTiles();
+
+const camSvg = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 7h11a2 2 0 0 1 2 2v1.5l4-2.5v8l-4-2.5V15a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z"/></svg>';
+const markers = new Map();
+let current = null;   // id of the camera open in the viewer
+CAMERAS.forEach(c => {
+  const icon = L.divIcon({
+    className: "pin", iconSize: [30, 30], iconAnchor: [4, 30],
+    html: `<div style="--c: var(${ROUTES[c.route]})">${camSvg}</div>`,
+  });
+  const m = L.marker([c.lat, c.lon], { icon, keyboard: true, title: c.name, riseOnHover: true })
+    .bindTooltip(c.name, { className: "cam-tip", direction: "top", offset: [11, -30] })
+    .on("click", () => openCam(c.id, { fly: false }))
+    // Leaflet rebuilds the divIcon element every time the marker is re-added (e.g. after filtering),
+    // so re-apply the active state and accessible name on each add.
+    .on("add", e => {
+      const el = e.target.getElement(); if (!el) return;
+      el.classList.toggle("active", c.id === current);
+      el.setAttribute("aria-label", `${c.name}, ${c.route} ${c.dir}. Open camera`);
+    })
+    .addTo(map);
+  markers.set(c.id, m);
+});
+const allBounds = L.latLngBounds(CAMERAS.map(c => [c.lat, c.lon]));
+function fitAll() {
+  const wide = innerWidth > 820;
+  map.fitBounds(allBounds, { paddingTopLeft: wide ? [400, 40] : [30, 30], paddingBottomRight: wide ? [40, 40] : [30, innerHeight * 0.46] });
+}
+fitAll();
+
+/* ---------- Filters & list ---------- */
+let filter = store.get("route", "All");
+if (filter !== "All" && !ROUTES[filter]) filter = "All";
+let query = "";
+const chips = $("#chips");
+["All", ...Object.keys(ROUTES)].forEach(r => {
+  const b = document.createElement("button");
+  b.className = "chip"; b.dataset.route = r;
+  const n = r === "All" ? CAMERAS.length : CAMERAS.filter(c => c.route === r).length;
+  b.innerHTML = (r === "All" ? "" : `<span class="dot" style="--c: var(${ROUTES[r]})"></span>`) + `${r} <span style="opacity:.6">${n}</span>`;
+  b.onclick = () => { filter = r; store.set("route", r); render(); };
+  chips.appendChild(b);
+});
+$("#q").addEventListener("input", e => { query = e.target.value.trim().toLowerCase(); render(); });
+
+const visible = () => CAMERAS.filter(c =>
+  (filter === "All" || c.route === filter) &&
+  (!query || `${c.name} ${c.code} ${c.route} ${c.dir} ${c.id}`.toLowerCase().includes(query)));
+
+// Lazy-load thumbnails only when scrolled into view. URLs are cached per camera so re-rendering the
+// list (every search keystroke) reuses the already-loaded image instead of re-fetching all of them.
+const thumbSrc = new Map();
+const io = new IntersectionObserver(entries => entries.forEach(e => {
+  if (!e.isIntersecting) return;
+  const img = e.target, id = +img.dataset.id;
+  if (!thumbSrc.has(id)) thumbSrc.set(id, imgUrl(id));
+  img.src = thumbSrc.get(id); io.unobserve(img);
+}), { root: $("#list"), rootMargin: "200px" });
+
+function metaHtml(c) {
+  return `<span class="route" style="--c: var(${ROUTES[c.route]})">${c.route}</span><span>${c.dir}</span>`;
+}
+function render() {
+  const vis = visible();
+  chips.querySelectorAll(".chip").forEach(b => b.setAttribute("aria-pressed", b.dataset.route === filter));
+  $("#statShown").textContent = vis.length;
+  $("#statTotal").textContent = CAMERAS.length;
+
+  // The open camera was filtered out: close the viewer rather than show a feed with no marker/list row
+  if (current && !vis.some(c => c.id === current)) closeViewer();
+
+  const list = $("#list");
+  io.disconnect();   // drop observers on the rows being thrown away
+  list.innerHTML = "";
+  if (!vis.length) list.innerHTML = `<li class="empty">No cameras match "${escapeHtml(query)}". Try a road name like "Murphy" or an exit number.</li>`;
+  vis.forEach(c => {
+    const li = document.createElement("li");
+    li.innerHTML = `<button class="cam${c.id === current ? " active" : ""}" data-id="${c.id}"${c.id === current ? ' aria-current="true"' : ""}>
+      <span class="thumb"><img data-id="${c.id}" alt="" loading="lazy"></span>
+      <span class="cam-body"><span class="cam-name">${c.name}</span>
+      <span class="cam-meta">${metaHtml(c)}</span></span></button>`;
+    li.querySelector("button").onclick = () => openCam(c.id);
+    li.querySelector("img").onerror = function () { this.style.visibility = "hidden"; imgBlocked(); };
+    li.querySelector("img").onload = function () { li.querySelector(".thumb").classList.toggle("offline", isPlaceholder(this)); };
+    io.observe(li.querySelector("img"));
+    list.appendChild(li);
+  });
+
+  CAMERAS.forEach(c => {
+    const m = markers.get(c.id), show = vis.includes(c);
+    if (show && !map.hasLayer(m)) m.addTo(map);
+    if (!show && map.hasLayer(m)) map.removeLayer(m);
+  });
+  if (wallOn) renderWall();
+}
+// If no camera image has ever loaded and loads keep failing, the host is blocking them (e.g. a sandboxed viewer)
+let imgOk = false, imgFails = 0;
+document.addEventListener("load", e => { if (e.target.tagName === "IMG" && e.target.naturalWidth) imgOk = true; }, true);
+function imgBlocked() { if (!imgOk && ++imgFails >= 3) $("#blocked").hidden = false; }
+function isPlaceholder(img) { return img.naturalWidth === 540 && img.naturalHeight === 330; }
+function escapeHtml(s) { return s.replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch])); }
+
+/* ---------- Camera wall ---------- */
+let wallOn = false, wallTimer;
+function setWall(on) {
+  wallOn = on;
+  $("#viewMap").setAttribute("aria-pressed", !on);
+  $("#viewWall").setAttribute("aria-pressed", on);
+  $("#wall").hidden = !on;
+  clearInterval(wallTimer);
+  if (on) {
+    closeViewer(); renderWall();
+    wallTimer = setInterval(() => {
+      if (!wallOn || document.hidden) return;   // don't pull every image for a hidden tab
+      document.querySelectorAll("#wallGrid img").forEach(i => { const u = imgUrl(i.dataset.id); thumbSrc.set(+i.dataset.id, u); i.src = u; });
+    }, 60000);
+  }
+}
+function renderWall() {
+  const vis = visible(), g = $("#wallGrid");
+  $("#wallCount").textContent = `${vis.length} feeds · auto-refresh every 60 s`;
+  g.innerHTML = "";
+  vis.forEach(c => {
+    const b = document.createElement("button");
+    b.className = "tile";
+    b.setAttribute("aria-label", `Open ${c.name}, ${c.route} ${c.dir}`);
+    if (!thumbSrc.has(c.id)) thumbSrc.set(c.id, imgUrl(c.id));
+    b.innerHTML = `<div class="img"><img data-id="${c.id}" src="${thumbSrc.get(c.id)}" alt=""></div>
+      <div class="cap"><div class="cam-name">${c.name}</div><div class="cam-meta">${metaHtml(c)}</div></div>`;
+    b.onclick = () => { setWall(false); openCam(c.id); };
+    g.appendChild(b);
+  });
+}
+$("#viewMap").onclick = () => setWall(false);
+$("#viewWall").onclick = () => setWall(true);
+
+/* ---------- Viewer ---------- */
+let rate = +store.get("rate", 60), left = rate, tick;
+if (![0, 15, 30, 60].includes(rate)) rate = left = 60;
+$("#rate").value = String(rate);
+$("#rate").onchange = e => { rate = +e.target.value; store.set("rate", rate); left = rate; updateCountdown(); };
+
+/* ---------- Live video (HLS) ---------- */
+let videoOn = false, hls = null, videoReq = 0;
+const TOKEN_URL = "https://vds.nc.insight-atms.com/api/SecureTokenUri/GetSecureTokenUriBySourceId";
+function stopVideo() {
+  videoReq++;
+  if (hls) { hls.destroy(); hls = null; }
+  const v = $("#vVideo"); v.pause(); v.removeAttribute("src"); v.load(); v.hidden = true;
+}
+function setVideoBtn() {
+  const c = CAMERAS.find(x => x.id === current), b = $("#vVideoBtn");
+  b.disabled = !c || !c.video;
+  b.title = b.disabled ? "This camera has no video stream" : "";
+  b.setAttribute("aria-pressed", videoOn);
+  b.querySelector("span").textContent = videoOn ? "Stop video" : "Live video";
+  $("#vRefresh").hidden = videoOn;
+  $("#rate").hidden = videoOn;
+}
+async function startVideo() {
+  const c = CAMERAS.find(x => x.id === current);
+  stopVideo(); setVideoBtn();
+  if (!c || !c.video) return;
+  const req = videoReq, v = $("#vVideo");
+  $("#vLoading").hidden = false; $("#vErr").hidden = true;
+  try {
+    const suffix = await fetch(TOKEN_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c.key) }).then(r => {
+      if (!r.ok) throw new Error(`token ${r.status}`); return r.json();
+    });
+    if (req !== videoReq) return;
+    const src = c.video + suffix;
+    v.hidden = false;
+    if (window.Hls && Hls.isSupported()) {
+      hls = new Hls({ liveSyncDurationCount: 2 });
+      hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal && req === videoReq) videoFailed("The video stream stopped. NCDOT may have this feed offline."); });
+      hls.loadSource(src); hls.attachMedia(v);
+    } else if (v.canPlayType("application/vnd.apple.mpegurl")) {
+      v.src = src;
+    } else throw new Error("no HLS support");
+    v.onplaying = () => { if (req === videoReq) { $("#vLoading").hidden = true; $("#vErr").hidden = true; $("#vWhenWrap").innerHTML = "<b>Streaming live video</b>"; $("#vNextWrap").textContent = "snapshot refresh paused"; } };
+    v.play().catch(() => {});
+  } catch (e) {
+    if (req === videoReq) videoFailed("Couldn't start the video. Showing the snapshot instead.");
+  }
+}
+function videoFailed(msg) {
+  videoOn = false; stopVideo(); setVideoBtn(); loadImage();
+  toast(msg);
+}
+function toast(msg) {
+  let t = $("#toast");
+  if (!t) { t = document.createElement("div"); t.id = "toast"; t.setAttribute("role", "status"); document.body.appendChild(t); }
+  t.textContent = msg; t.hidden = false; clearTimeout(t._h); t._h = setTimeout(() => t.hidden = true, 4500);
+}
+$("#vVideoBtn").onclick = () => {
+  videoOn = !videoOn;
+  if (videoOn) startVideo(); else { stopVideo(); setVideoBtn(); loadImage(); }
+};
+
+function openCam(id, { fly = true } = {}) {
+  const c = CAMERAS.find(x => x.id === id);
+  if (!c) return;
+  if (wallOn) setWall(false);
+  // Deep link / hashchange to a camera the current filter hides: clear the filter so its marker and row exist
+  if (!visible().includes(c)) { filter = "All"; query = ""; $("#q").value = ""; store.set("route", filter); render(); }
+  if (current && markers.get(current)) markers.get(current).getElement()?.classList.remove("active");
+  current = id;
+  markers.get(id).getElement()?.classList.add("active");
+  document.querySelectorAll(".cam").forEach(b => {
+    const on = +b.dataset.id === id;
+    b.classList.toggle("active", on);
+    on ? b.setAttribute("aria-current", "true") : b.removeAttribute("aria-current");
+  });
+  document.querySelector(`.cam[data-id="${id}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+
+  $("#vName").textContent = c.name;
+  const r = $("#vRoute"); r.textContent = c.route; r.style.setProperty("--c", `var(${ROUTES[c.route]})`);
+  $("#vDir").textContent = c.dir;
+  $("#vCode").textContent = c.code;
+  $("#vLat").textContent = c.lat.toFixed(5);
+  $("#vLon").textContent = c.lon.toFixed(5);
+  $("#vImgLink").href = `https://www.drivenc.gov/map/Cctv/${c.id}`;
+  $("#vGmaps").href = `https://www.google.com/maps/search/?api=1&query=${c.lat},${c.lon}`;
+  $("#vImg").alt = `Live view: ${c.name}`;
+  $("#viewer").hidden = false;
+  if (innerWidth <= 820) setSheet(true);
+  if (!CAMERAS.find(x => x.id === id).video) videoOn = false;
+  stopVideo(); setVideoBtn();
+  loadImage();
+  if (videoOn) startVideo();
+
+  if (fly) {
+    // Center the camera in the map area left uncovered by the panels
+    const z = Math.max(map.getZoom(), 14);
+    const cr = $("#console").getBoundingClientRect(), vr = $("#viewer").getBoundingClientRect();
+    const wide = innerWidth > 820;
+    const target = wide
+      ? L.point((cr.right + vr.left) / 2, innerHeight / 2)
+      : L.point(innerWidth / 2, (vr.bottom + cr.top) / 2);
+    const offset = L.point(innerWidth / 2, innerHeight / 2).subtract(target);
+    const center = map.unproject(map.project([c.lat, c.lon], z).add(offset), z);
+    map.flyTo(center, z, { duration: 0.6 });
+  }
+  history.replaceState(null, "", `#cam-${id}`);
+}
+function loadImage() {
+  if (!current) return;
+  $("#vLoading").hidden = false; $("#vErr").hidden = true;
+  const url = imgUrl(current), want = current, pre = new Image();
+  pre.onload = () => {
+    if (want !== current) return;
+    $("#vImg").src = url; $("#vImg").style.visibility = "visible";
+    $("#vLoading").hidden = true;
+    // DriveNC serves a 540x330 "No live camera feed" PNG when a feed is offline
+    const off = isPlaceholder(pre);
+    document.querySelector(".stage .live").hidden = off;
+    $("#vErr").hidden = !off;
+    $("#vImg").style.visibility = off ? "hidden" : "visible";
+    if (!videoOn) $("#vWhenWrap").innerHTML = 'Updated <b id="vWhen"></b>';
+    if (!videoOn) $("#vWhen").textContent = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+    if (!$("#lightbox").hidden) { $("#lbImg").src = url; $("#lbCap").textContent = CAMERAS.find(x => x.id === want).name; $("#lbImg").alt = $("#vImg").alt; }
+  };
+  pre.onerror = () => { imgBlocked(); if (want !== current) return; $("#vLoading").hidden = true; $("#vErr").hidden = false; $("#vImg").style.visibility = "hidden"; };
+  pre.src = url;
+  left = rate; updateCountdown();
+}
+function updateCountdown() {
+  if (rate) $("#vNextWrap").innerHTML = `next in <b id="vNextIn">${left}s</b>`;
+  else $("#vNextWrap").textContent = "auto-refresh paused";
+  const bar = $("#vBar");
+  // Snap back to empty on reset instead of animating the bar backwards over 1 s
+  bar.style.transition = !rate || left >= rate ? "none" : "";
+  bar.style.width = rate ? `${100 * (1 - left / rate)}%` : "0%";
+}
+tick = setInterval(() => {
+  const now = new Date();
+  $("#clock").textContent = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (!current || $("#viewer").hidden || !rate || document.hidden || videoOn) return;
+  left -= 1;
+  if (left <= 0) loadImage(); else updateCountdown();
+}, 1000);
+
+function closeViewer() {
+  if ($("#viewer").hidden && !current) return;
+  const was = current, hadFocus = $("#viewer").contains(document.activeElement);
+  closeLightbox();
+  stopVideo(); videoOn = false;
+  $("#viewer").hidden = true;
+  if (current) markers.get(current).getElement()?.classList.remove("active");
+  document.querySelectorAll(".cam.active").forEach(b => { b.classList.remove("active"); b.removeAttribute("aria-current"); });
+  current = null;
+  setSheet(false);
+  history.replaceState(null, "", location.pathname + location.search);
+  // Don't strand keyboard focus on the now-hidden viewer
+  if (hadFocus) (document.querySelector(`.cam[data-id="${was}"]`) || $("#q")).focus();
+}
+function step(d) {
+  const vis = visible(); if (!vis.length) return;
+  const i = vis.findIndex(c => c.id === current);
+  // If the current camera isn't in the list, "next" is the first and "prev" the last
+  const j = i < 0 ? (d > 0 ? 0 : vis.length - 1) : (i + d + vis.length) % vis.length;
+  openCam(vis[j].id);
+}
+let lbReturn = null;
+function enlarge() {
+  if (!current || !$("#vImg").getAttribute("src")) return;
+  $("#lbImg").src = $("#vImg").src;
+  $("#lbImg").alt = $("#vImg").alt;
+  $("#lbCap").textContent = CAMERAS.find(c => c.id === current).name;
+  lbReturn = document.activeElement;
+  $("#lightbox").hidden = false;
+  $("#lbClose").focus();
+}
+function closeLightbox() {
+  if ($("#lightbox").hidden) return;
+  $("#lightbox").hidden = true;
+  if (lbReturn && document.contains(lbReturn)) lbReturn.focus();
+  lbReturn = null;
+}
+
+/* ---------- Phone bottom sheet ---------- */
+function setSheet(collapsed) {
+  $("#console").classList.toggle("collapsed", collapsed);
+  document.body.classList.toggle("sheet-collapsed", collapsed);
+  const t = $("#sheetToggle");
+  t.setAttribute("aria-expanded", !collapsed);
+  t.setAttribute("aria-label", collapsed ? "Expand camera list" : "Collapse camera list");
+}
+$("#sheetToggle").onclick = e => { e.stopPropagation(); setSheet(!$("#console").classList.contains("collapsed")); };
+// Tap the handle/header to toggle, or drag it up/down
+let drag = null;
+["#grabber", ".brand"].forEach(sel => {
+  const el = $(sel);
+  el.addEventListener("pointerdown", e => { if (innerWidth <= 820 && !e.target.closest("button:not(.grabber)")) drag = { y: e.clientY, moved: false }; });
+  el.addEventListener("click", e => {
+    if (innerWidth > 820 || e.target.closest("button:not(.grabber)")) return;
+    if (drag?.moved) { drag = null; return; }
+    drag = null;
+    setSheet(!$("#console").classList.contains("collapsed"));
+  });
+});
+addEventListener("pointermove", e => { if (drag && Math.abs(e.clientY - drag.y) > 8) drag.moved = true; });
+addEventListener("pointerup", e => {
+  if (!drag?.moved) return;
+  const dy = e.clientY - drag.y;
+  if (Math.abs(dy) > 30) setSheet(dy > 0);
+});
+
+$("#vClose").onclick = closeViewer;
+$("#vPrev").onclick = () => step(-1);
+$("#vNext").onclick = () => step(1);
+$("#vRefresh").onclick = loadImage;
+$("#vFull").onclick = enlarge;
+$("#vImg").onclick = enlarge;
+$("#lbClose").onclick = closeLightbox;
+$("#lightbox").onclick = e => { if (e.target.id === "lightbox") closeLightbox(); };
+
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;            // leave Ctrl+R / Ctrl+F etc. to the browser
+  if (e.target.matches?.("input, select, textarea")) { if (e.key === "Escape") e.target.blur(); return; }
+  const lb = !$("#lightbox").hidden, open = !$("#viewer").hidden;
+  if (lb && e.key === "Tab") { e.preventDefault(); $("#lbClose").focus(); return; }   // keep focus in the dialog
+  if (e.key === "Escape") { if (lb) closeLightbox(); else closeViewer(); }
+  else if (!open) { if (e.key === "/") { e.preventDefault(); $("#q").focus(); } }
+  else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+    if (e.target.closest?.(".leaflet-container")) return;        // arrows pan the map when it has focus
+    step(e.key === "ArrowRight" ? 1 : -1);
+  }
+  else if (e.key.toLowerCase() === "r") loadImage();
+  else if (e.key.toLowerCase() === "f") { if (!lb) enlarge(); }
+  else if (e.key === "/") { e.preventDefault(); $("#q").focus(); }
+});
+
+render();
+// Deep link: index.html#cam-5692 opens that camera
+const deep = location.hash.match(/cam-(\d+)/);
+if (deep) openCam(+deep[1]);
+addEventListener("hashchange", () => { const m = location.hash.match(/cam-(\d+)/); if (m) openCam(+m[1]); });
+</script>
+</body>
+</html>
